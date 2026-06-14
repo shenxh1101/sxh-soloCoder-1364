@@ -1,0 +1,33 @@
+{
+  "minEntropy": 3.0,
+  "minLength": 8,
+  "patterns": [
+    {
+      "id": "custom-service-key",
+      "name": "Custom Service API Key",
+      "pattern": "/cs-[A-Za-z0-9]{32}/",
+      "description": "自定义服务API密钥",
+      "minEntropy": 3.5
+    }
+  ],
+  "whitelist": [
+    "test-only-key",
+    "development-fake-key"
+  ],
+  "ignoreDirs": [
+    "node_modules",
+    ".git",
+    "dist",
+    "build"
+  ],
+  "fileExtensions": [
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx"
+  ],
+  "propertyNames": [
+    "myCustomSecret",
+    "internalToken"
+  ]
+}

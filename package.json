@@ -1,0 +1,28 @@
+{
+  "name": "api-key-miner",
+  "version": "1.0.0",
+  "description": "AST-based JavaScript API key and secret scanner",
+  "main": "src/cli.js",
+  "bin": {
+    "api-key-miner": "./bin/api-key-miner.js"
+  },
+  "scripts": {
+    "start": "node bin/api-key-miner.js",
+    "test": "node bin/api-key-miner.js ./test --format table"
+  },
+  "keywords": [
+    "security",
+    "api-key",
+    "secret-scanner",
+    "ast",
+    "esprima"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "esprima": "^4.0.1",
+    "glob": "^10.3.10",
+    "commander": "^11.1.0",
+    "chalk": "^4.1.2"
+  }
+}

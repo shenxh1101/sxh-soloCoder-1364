@@ -20,9 +20,25 @@ class ASTScanner {
       return findings;
     }
 
+    return this.scanCode(code, filePath);
+  }
+
+  scanCode(code, filePath = '<stdin>') {
+    const findings = [];
+
+    let processedCode = code;
+    if (processedCode.startsWith('#!')) {
+      const firstNewline = processedCode.indexOf('\n');
+      if (firstNewline !== -1) {
+        processedCode = processedCode.substring(firstNewline + 1);
+      } else {
+        processedCode = '';
+      }
+    }
+
     let ast;
     try {
-      ast = esprima.parseScript(code, {
+      ast = esprima.parseScript(processedCode, {
         loc: true,
         range: true,
         tokens: true,
@@ -31,7 +47,7 @@ class ASTScanner {
       });
     } catch (parseError) {
       try {
-        ast = esprima.parseModule(code, {
+        ast = esprima.parseModule(processedCode, {
           loc: true,
           range: true,
           tokens: true,

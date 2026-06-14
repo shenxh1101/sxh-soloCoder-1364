@@ -6,6 +6,8 @@ class Reporter {
   constructor(options = {}) {
     this.showValue = options.showValue || false;
     this.showContext = options.showContext || false;
+    this.stats = options.stats || {};
+    this.baselineResult = options.baselineResult || null;
   }
 
   generateReport(findings, format = 'table') {
@@ -16,6 +18,8 @@ class Reporter {
         return this.formatJSON(findings, summary);
       case 'csv':
         return this.formatCSV(findings);
+      case 'sarif':
+        return this.formatSARIF(findings, summary);
       case 'table':
       default:
         return this.formatTable(findings, summary);
@@ -40,13 +44,21 @@ class Reporter {
 
     return {
       totalFindings: findings.length,
-      filesScanned: 0,
+      filesScanned: this.stats.filesScanned || 0,
       filesWithFindings: files.size,
+      filesWithErrors: this.stats.filesWithErrors || 0,
       highRisk,
       mediumRisk,
       lowRisk,
       patternStats,
-      scannedAt: new Date().toISOString()
+      scannedAt: new Date().toISOString(),
+      scanMode: this.stats.scanMode || 'full',
+      baselineInfo: this.baselineResult ? {
+        isFirstScan: this.baselineResult.isFirstScan,
+        newCount: this.baselineResult.newFindings.length,
+        existingCount: this.baselineResult.existingFindings.length,
+        resolvedCount: this.baselineResult.resolvedFindings.length
+      } : null
     };
   }
 
@@ -58,51 +70,63 @@ class Reporter {
     output += chalk.bold.cyan('╚════════════════════════════════════════════════════════════╝\n\n');
 
     output += chalk.bold('📊 扫描摘要:\n');
+    output += `  ${chalk.yellow('扫描模式:')} ${this.getScanModeLabel(summary.scanMode)}\n`;
+    output += `  ${chalk.yellow('扫描文件:')} ${summary.filesScanned}\n`;
+    output += `  ${chalk.yellow('命中文件:')} ${summary.filesWithFindings}\n`;
+    if (summary.filesWithErrors > 0) {
+      output += `  ${chalk.red('解析错误:')} ${summary.filesWithErrors}\n`;
+    }
     output += `  ${chalk.yellow('发现总数:')} ${summary.totalFindings}\n`;
-    output += `  ${chalk.yellow('涉及文件:')} ${summary.filesWithFindings}\n`;
     output += `  ${chalk.red('高风险:')}   ${summary.highRisk}\n`;
     output += `  ${chalk.yellow('中风险:')}   ${summary.mediumRisk}\n`;
-    output += `  ${chalk.green('低风险:')}   ${summary.lowRisk}\n\n`;
+    output += `  ${chalk.green('低风险:')}   ${summary.lowRisk}\n`;
+
+    if (summary.baselineInfo) {
+      output += `\n${chalk.bold('📍 基线对比:')}\n`;
+      if (summary.baselineInfo.isFirstScan) {
+        output += `  ${chalk.gray('首次扫描，无基线数据')}\n`;
+      } else {
+        output += `  ${chalk.red('新增:')} ${summary.baselineInfo.newCount}\n`;
+        output += `  ${chalk.yellow('已存在:')} ${summary.baselineInfo.existingCount}\n`;
+        output += `  ${chalk.green('已修复:')} ${summary.baselineInfo.resolvedCount}\n`;
+      }
+    }
+
+    output += '\n';
 
     if (findings.length === 0) {
       output += chalk.green('✅ 未发现可疑的API密钥或硬编码机密。\n');
       return output;
     }
 
-    output += chalk.bold('📋 详细发现:\n\n');
-
-    findings.forEach((finding, index) => {
-      const riskColor = this.getRiskColor(finding.entropyLevel);
-
-      output += chalk.bold(`${index + 1}. ${riskColor('▲ ' + this.getRiskLabel(finding.entropyLevel) + ' 风险')}\n`);
-      output += `   ${chalk.gray('文件:')} ${chalk.white(finding.file)}\n`;
-      output += `   ${chalk.gray('位置:')} 第 ${finding.line} 行, 第 ${finding.column} 列\n`;
-
-      if (finding.pattern) {
-        output += `   ${chalk.gray('规则:')} ${chalk.blue(finding.pattern.name)}\n`;
-        output += `   ${chalk.gray('描述:')} ${finding.pattern.description}\n`;
-      } else if (finding.keyName) {
-        output += `   ${chalk.gray('敏感属性:')} ${chalk.magenta(finding.keyName)}\n`;
-      }
-
-      output += `   ${chalk.gray('熵值:')} ${finding.entropy.toFixed(4)} (${finding.entropyLabel})\n`;
-
-      if (this.showValue) {
-        output += `   ${chalk.gray('值:')} ${chalk.red(finding.value)}\n`;
-      } else {
-        output += `   ${chalk.gray('掩码值:')} ${chalk.yellow(finding.maskedValue)}\n`;
-      }
-
-      if (this.showContext && finding.context) {
-        output += `   ${chalk.gray('上下文:')}\n`;
-        const contextLines = finding.context.split('\n');
-        contextLines.forEach(line => {
-          output += `     ${chalk.gray('|')} ${line}\n`;
-        });
-      }
-
+    if (this.baselineResult && !this.baselineResult.isFirstScan && this.baselineResult.newFindings.length > 0) {
+      output += chalk.bold('🆕 新增发现:\n\n');
+      this.baselineResult.newFindings.forEach((finding, index) => {
+        output += this.formatFindingItem(finding, index + 1, 'new');
+      });
       output += '\n';
-    });
+
+      if (this.baselineResult.existingFindings.length > 0) {
+        output += chalk.bold('� 已存在 (基线中):\n\n');
+        this.baselineResult.existingFindings.forEach((finding, index) => {
+          output += this.formatFindingItem(finding, index + 1, 'existing');
+        });
+        output += '\n';
+      }
+
+      if (this.baselineResult.resolvedFindings.length > 0) {
+        output += chalk.bold('✅ 已修复 (基线中已不存在):\n\n');
+        this.baselineResult.resolvedFindings.forEach((f, index) => {
+          output += `  ${index + 1}. ${chalk.green(f.file)}:${f.line}\n`;
+        });
+        output += '\n';
+      }
+    } else {
+      output += chalk.bold('�📋 详细发现:\n\n');
+      findings.forEach((finding, index) => {
+        output += this.formatFindingItem(finding, index + 1);
+      });
+    }
 
     output += chalk.bold('📈 规则匹配统计:\n');
     for (const [pattern, count] of Object.entries(summary.patternStats)) {
@@ -112,6 +136,58 @@ class Reporter {
     output += `\n${chalk.gray(`扫描时间: ${summary.scannedAt}`)}\n`;
 
     return output;
+  }
+
+  formatFindingItem(finding, index, status = null) {
+    const riskColor = this.getRiskColor(finding.entropyLevel);
+    let prefix = '';
+
+    if (status === 'new') {
+      prefix = chalk.red('[新增] ');
+    } else if (status === 'existing') {
+      prefix = chalk.gray('[已有] ');
+    }
+
+    let output = '';
+    output += chalk.bold(`${index}. ${prefix}${riskColor('▲ ' + this.getRiskLabel(finding.entropyLevel) + ' 风险')}\n`);
+    output += `   ${chalk.gray('文件:')} ${chalk.white(finding.file)}\n`;
+    output += `   ${chalk.gray('位置:')} 第 ${finding.line} 行, 第 ${finding.column} 列\n`;
+
+    if (finding.pattern) {
+      output += `   ${chalk.gray('规则:')} ${chalk.blue(finding.pattern.name)}\n`;
+      output += `   ${chalk.gray('描述:')} ${finding.pattern.description}\n`;
+    } else if (finding.keyName) {
+      output += `   ${chalk.gray('敏感属性:')} ${chalk.magenta(finding.keyName)}\n`;
+    }
+
+    output += `   ${chalk.gray('熵值:')} ${finding.entropy.toFixed(4)} (${finding.entropyLabel})\n`;
+
+    if (this.showValue) {
+      output += `   ${chalk.gray('值:')} ${chalk.red(finding.value)}\n`;
+    } else {
+      output += `   ${chalk.gray('掩码值:')} ${chalk.yellow(finding.maskedValue)}\n`;
+    }
+
+    if (this.showContext && finding.context) {
+      output += `   ${chalk.gray('上下文:')}\n`;
+      const contextLines = finding.context.split('\n');
+      contextLines.forEach(line => {
+        output += `     ${chalk.gray('|')} ${line}\n`;
+      });
+    }
+
+    output += '\n';
+    return output;
+  }
+
+  getScanModeLabel(mode) {
+    const labels = {
+      'full': '全量扫描',
+      'git-diff': 'Git 变更文件',
+      'stdin': '标准输入',
+      'file': '指定文件'
+    };
+    return labels[mode] || mode;
   }
 
   formatJSON(findings, summary) {
@@ -130,7 +206,8 @@ class Reporter {
         entropyLevel: f.entropyLevel,
         entropyLabel: f.entropyLabel,
         context: this.showContext ? f.context : undefined,
-        timestamp: f.timestamp
+        timestamp: f.timestamp,
+        baselineStatus: f.baselineStatus || null
       }))
     };
 
@@ -138,7 +215,7 @@ class Reporter {
   }
 
   formatCSV(findings) {
-    const headers = ['文件', '行号', '列号', '类型', '规则/属性', '熵值', '熵值等级', '值', '时间'];
+    const headers = ['文件', '行号', '列号', '类型', '规则/属性', '熵值', '熵值等级', '值', '时间', '基线状态'];
 
     const rows = findings.map(f => [
       f.file,
@@ -149,10 +226,125 @@ class Reporter {
       f.entropy.toFixed(4),
       f.entropyLabel,
       this.showValue ? `"${f.value.replace(/"/g, '""')}"` : `"${f.maskedValue}"`,
-      f.timestamp
+      f.timestamp,
+      f.baselineStatus || ''
     ]);
 
     return [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  }
+
+  formatSARIF(findings, summary) {
+    const rules = {};
+    const results = [];
+
+    for (const finding of findings) {
+      const ruleId = finding.pattern
+        ? `APIK-${finding.pattern.id}`
+        : `APIK-sensitive-${finding.keyName || 'property'}`;
+
+      if (!rules[ruleId]) {
+        rules[ruleId] = {
+          id: ruleId,
+          name: finding.pattern ? finding.pattern.name : `Sensitive Property: ${finding.keyName}`,
+          shortDescription: {
+            text: finding.pattern
+              ? finding.pattern.description
+              : `检测到敏感属性 ${finding.keyName} 包含硬编码值`
+          },
+          defaultConfiguration: {
+            level: this.getSarifLevel(finding.entropyLevel)
+          },
+          help: {
+            text: finding.pattern
+              ? `检测到 ${finding.pattern.name} 类型的API密钥`
+              : `检测到敏感属性 ${finding.keyName} 包含硬编码的字符串值`,
+            markdown: finding.pattern
+              ? `**${finding.pattern.name}**\n\n${finding.pattern.description}\n\n建议将密钥移至环境变量或密钥管理服务。`
+              : `**敏感属性 ${finding.keyName}**\n\n检测到硬编码的敏感值，建议移至环境变量或密钥管理服务。`
+          }
+        };
+      }
+
+      const result = {
+        ruleId,
+        level: this.getSarifLevel(finding.entropyLevel),
+        message: {
+          text: finding.pattern
+            ? `发现 ${finding.pattern.name}: ${finding.maskedValue}`
+            : `敏感属性 ${finding.keyName} 包含硬编码值: ${finding.maskedValue}`
+        },
+        locations: [
+          {
+            physicalLocation: {
+              artifactLocation: {
+                uri: finding.file.replace(/\\/g, '/')
+              },
+              region: {
+                startLine: finding.line,
+                startColumn: finding.column + 1
+              }
+            }
+          }
+        ],
+        properties: {
+          entropy: finding.entropy,
+          entropyLevel: finding.entropyLevel,
+          maskedValue: finding.maskedValue
+        }
+      };
+
+      if (finding.context) {
+        result.locations[0].physicalLocation.region.snippet = {
+          text: finding.context
+        };
+      }
+
+      if (finding.baselineStatus) {
+        result.properties.baselineStatus = finding.baselineStatus;
+      }
+
+      results.push(result);
+    }
+
+    const sarif = {
+      $schema: 'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json',
+      version: '2.1.0',
+      runs: [
+        {
+          tool: {
+            driver: {
+              name: 'api-key-miner',
+              version: '1.0.0',
+              informationUri: 'https://github.com/api-key-miner',
+              rules: Object.values(rules)
+            }
+          },
+          invocations: [
+            {
+              executionSuccessful: true,
+              startTimeUtc: summary.scannedAt
+            }
+          ],
+          results
+        }
+      ]
+    };
+
+    return JSON.stringify(sarif, null, 2);
+  }
+
+  getSarifLevel(entropyLevel) {
+    switch (entropyLevel) {
+      case 'very_high':
+      case 'high':
+        return 'error';
+      case 'medium':
+        return 'warning';
+      case 'low':
+        return 'note';
+      default:
+        return 'none';
+    }
   }
 
   saveReport(report, outputPath) {

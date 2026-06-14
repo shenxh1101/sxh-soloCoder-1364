@@ -10,10 +10,16 @@
       "minEntropy": 3.5
     }
   ],
-  "whitelist": [
-    "test-only-key",
-    "development-fake-key"
-  ],
+  "whitelist": {
+    "exact": [
+      "test-only-key",
+      "development-fake-key"
+    ],
+    "regex": [
+      "/^test.*$/",
+      "/^dev_/"
+    ]
+  },
   "ignoreDirs": [
     "node_modules",
     ".git",

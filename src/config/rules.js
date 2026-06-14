@@ -127,33 +127,39 @@ const sensitivePropertyNames = [
   'master_key'
 ];
 
-const defaultWhitelist = [
-  'sk-test',
-  'sk-live-test',
-  'sk-xxxxxxxxxxxxxxxxxxxx',
-  'sk-********************',
-  'API_KEY',
-  'YOUR_API_KEY',
-  'your-api-key',
-  'your_secret_key',
-  'xxxxxxxxxxxxxxxxxxxx',
-  '********************************',
-  '00000000000000000000000000000000',
-  '12345678901234567890123456789012',
-  'abcdefghijklmnopqrstuvwxyz123456',
-  'test-api-key',
-  'test_secret_key',
-  'fake-key',
-  'placeholder',
-  'dummy',
-  'example',
-  'change-me',
-  'changeme',
-  'replace-me',
-  'replaceme',
-  'TODO',
-  'FIXME'
-];
+const defaultWhitelist = {
+  exact: [
+    'sk-test',
+    'sk-live-test',
+    'sk-xxxxxxxxxxxxxxxxxxxx',
+    'sk-********************',
+    'API_KEY',
+    'YOUR_API_KEY',
+    'your-api-key',
+    'your_secret_key',
+    'xxxxxxxxxxxxxxxxxxxx',
+    '********************************',
+    '00000000000000000000000000000000',
+    '12345678901234567890123456789012',
+    'abcdefghijklmnopqrstuvwxyz123456',
+    'test-api-key',
+    'test_secret_key',
+    'fake-key',
+    'change-me',
+    'changeme',
+    'replace-me',
+    'replaceme'
+  ],
+  regex: [
+    /^[xX*_.-]+$/,
+    /^[0]+$/,
+    /^TODO$/i,
+    /^FIXME$/i,
+    /^placeholder$/i,
+    /^dummy$/i,
+    /^example$/i
+  ]
+};
 
 const defaultFileExtensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'];
 

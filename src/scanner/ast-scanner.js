@@ -20,11 +20,15 @@ class ASTScanner {
       return findings;
     }
 
-    return this.scanCode(code, filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const language = ext === '.ts' || ext === '.tsx' ? 'ts' : 'js';
+
+    return this.scanCode(code, filePath, { language });
   }
 
-  scanCode(code, filePath = '<stdin>') {
+  scanCode(code, filePath = '<stdin>', opts = {}) {
     const findings = [];
+    const language = opts.language || 'js';
 
     let processedCode = code;
     if (processedCode.startsWith('#!')) {
@@ -55,37 +59,36 @@ class ASTScanner {
           jsx: true
         });
       } catch (moduleError) {
-        console.error(`警告: 无法解析文件 ${filePath}: ${parseError.message}`);
-        return findings;
+        throw new Error(parseError.message);
       }
     }
 
-    this.traverseAST(ast, code, filePath, findings);
+    this.traverseAST(ast, code, filePath, findings, language);
 
     return this.deduplicateFindings(findings);
   }
 
-  traverseAST(node, code, filePath, findings, parent = null, parentKey = null) {
+  traverseAST(node, code, filePath, findings, language = 'js', parent = null, parentKey = null) {
     if (!node || typeof node !== 'object') return;
 
     if (node.type === 'Literal' && typeof node.value === 'string') {
-      this.checkStringLiteral(node, code, filePath, findings);
+      this.checkStringLiteral(node, code, filePath, findings, language);
     }
 
     if (node.type === 'Property' || node.type === 'ObjectProperty') {
-      this.checkObjectProperty(node, code, filePath, findings);
+      this.checkObjectProperty(node, code, filePath, findings, language);
     }
 
     if (node.type === 'VariableDeclarator' && node.init) {
-      this.checkVariableDeclaration(node, code, filePath, findings);
+      this.checkVariableDeclaration(node, code, filePath, findings, language);
     }
 
     if (node.type === 'AssignmentExpression' && node.right) {
-      this.checkAssignmentExpression(node, code, filePath, findings);
+      this.checkAssignmentExpression(node, code, filePath, findings, language);
     }
 
     if (node.type === 'TemplateLiteral') {
-      this.checkTemplateLiteral(node, code, filePath, findings);
+      this.checkTemplateLiteral(node, code, filePath, findings, language);
     }
 
     for (const key in node) {
@@ -94,15 +97,15 @@ class ASTScanner {
 
       if (Array.isArray(child)) {
         for (const item of child) {
-          this.traverseAST(item, code, filePath, findings, node, key);
+          this.traverseAST(item, code, filePath, findings, language, node, key);
         }
       } else if (child && typeof child === 'object' && typeof child.type === 'string') {
-        this.traverseAST(child, code, filePath, findings, node, key);
+        this.traverseAST(child, code, filePath, findings, language, node, key);
       }
     }
   }
 
-  checkStringLiteral(node, code, filePath, findings) {
+  checkStringLiteral(node, code, filePath, findings, language = 'js') {
     const value = node.value;
 
     if (!value || value.length < this.config.minLength) return;
@@ -134,13 +137,14 @@ class ASTScanner {
           filePath,
           patternRule,
           entropy,
-          context: this.extractContext(code, node.loc.start.line)
+          context: this.extractContext(code, node.loc.start.line),
+          language
         }));
       }
     }
   }
 
-  checkObjectProperty(node, code, filePath, findings) {
+  checkObjectProperty(node, code, filePath, findings, language = 'js') {
     let keyName = null;
 
     if (node.key) {
@@ -166,10 +170,10 @@ class ASTScanner {
 
     if (!valueNode) return;
 
-    this.checkSensitiveValue(valueNode, keyName, code, filePath, findings);
+    this.checkSensitiveValue(valueNode, keyName, code, filePath, findings, language);
   }
 
-  checkVariableDeclaration(node, code, filePath, findings) {
+  checkVariableDeclaration(node, code, filePath, findings, language = 'js') {
     const varName = node.id && node.id.name ? node.id.name : '';
 
     const isSensitive = this.config.propertyNames.some(
@@ -178,10 +182,10 @@ class ASTScanner {
 
     if (!isSensitive) return;
 
-    this.checkSensitiveValue(node.init, varName, code, filePath, findings);
+    this.checkSensitiveValue(node.init, varName, code, filePath, findings, language);
   }
 
-  checkAssignmentExpression(node, code, filePath, findings) {
+  checkAssignmentExpression(node, code, filePath, findings, language = 'js') {
     let varName = '';
 
     if (node.left.type === 'Identifier') {
@@ -204,10 +208,10 @@ class ASTScanner {
 
     if (!isSensitive) return;
 
-    this.checkSensitiveValue(node.right, varName, code, filePath, findings);
+    this.checkSensitiveValue(node.right, varName, code, filePath, findings, language);
   }
 
-  checkTemplateLiteral(node, code, filePath, findings) {
+  checkTemplateLiteral(node, code, filePath, findings, language = 'js') {
     for (const quasi of node.quasis) {
       if (quasi.value && quasi.value.raw) {
         const value = quasi.value.raw;
@@ -216,13 +220,13 @@ class ASTScanner {
             value,
             loc: quasi.loc
           };
-          this.checkStringLiteral(tempNode, code, filePath, findings);
+          this.checkStringLiteral(tempNode, code, filePath, findings, language);
         }
       }
     }
   }
 
-  checkSensitiveValue(valueNode, keyName, code, filePath, findings) {
+  checkSensitiveValue(valueNode, keyName, code, filePath, findings, language = 'js') {
     let stringValue = null;
     let loc = null;
 
@@ -253,7 +257,8 @@ class ASTScanner {
       filePath,
       keyName,
       entropy,
-      context: loc ? this.extractContext(code, loc.start.line) : ''
+      context: loc ? this.extractContext(code, loc.start.line) : '',
+      language
     }));
   }
 
@@ -280,7 +285,7 @@ class ASTScanner {
     return lines.slice(start, end).join('\n').trim();
   }
 
-  createFinding({ type, value, line, column, filePath, patternRule, keyName, entropy, context }) {
+  createFinding({ type, value, line, column, filePath, patternRule, keyName, entropy, context, language }) {
     const entropyInfo = getEntropyLevel(entropy);
 
     return {
@@ -301,6 +306,7 @@ class ASTScanner {
       entropyLevel: entropyInfo.level,
       entropyLabel: entropyInfo.label,
       context,
+      language: language || 'js',
       timestamp: new Date().toISOString()
     };
   }

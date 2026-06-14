@@ -74,18 +74,14 @@ class Reporter {
     output += `  ${chalk.yellow('扫描模式:')} ${this.getScanModeLabel(summary.scanMode)}\n`;
     output += `  ${chalk.yellow('扫描文件:')} ${summary.filesScanned} 个\n`;
     output += `  ${chalk.yellow('命中文件:')} ${summary.filesWithFindings} 个 (含可疑密钥)\n`;
-
-    if (summary.filesWithParseErrors > 0) {
-      output += `  ${chalk.red('解析失败:')} ${summary.filesWithParseErrors} 个\n`;
-      for (const f of summary.parseErrorFiles) {
-        output += `    ${chalk.gray('- ' + f)}\n`;
-      }
-    }
-
     output += `  ${chalk.yellow('发现总数:')} ${summary.totalFindings}\n`;
     output += `  ${chalk.red('高风险:')}   ${summary.highRisk}\n`;
     output += `  ${chalk.yellow('中风险:')}   ${summary.mediumRisk}\n`;
     output += `  ${chalk.green('低风险:')}   ${summary.lowRisk}\n`;
+
+    if (summary.filesWithParseErrors > 0) {
+      output += `  ${chalk.red('⚠  解析失败:')} ${summary.filesWithParseErrors} 个文件未被扫描\n`;
+    }
 
     if (summary.baselineInfo) {
       output += `\n${chalk.bold('📍 基线对比:')}\n`;
@@ -100,12 +96,19 @@ class Reporter {
 
     output += '\n';
 
-    if (findings.length === 0) {
-      output += chalk.green('✅ 未发现可疑的API密钥或硬编码机密。\n');
-      if (summary.filesWithParseErrors > 0) {
-        output += chalk.yellow(`⚠️  但有 ${summary.filesWithParseErrors} 个文件解析失败，建议检查。\n`);
+    if (summary.filesWithParseErrors > 0) {
+      output += chalk.bold.red('⚠️  解析失败文件 (未被扫描):\n\n');
+      for (const f of summary.parseErrorFiles) {
+        output += `  ${chalk.red('✗')} ${chalk.underline(f)}\n`;
       }
-      return output;
+      output += `\n${chalk.gray('  提示: 这些文件可能语法无效或包含不支持的语法，建议手动检查。')}\n\n`;
+    }
+
+    if (findings.length === 0 && summary.filesWithParseErrors === 0) {
+      output += chalk.green('✅ 未发现可疑的API密钥或硬编码机密。\n');
+    } else if (findings.length === 0 && summary.filesWithParseErrors > 0) {
+      output += chalk.green('✅ 未发现可疑的API密钥或硬编码机密。\n');
+      output += chalk.yellow(`⚠️  但有 ${summary.filesWithParseErrors} 个文件解析失败，扫描不完整。\n`);
     }
 
     if (this.baselineResult && !this.baselineResult.isFirstScan && this.baselineResult.newFindings.length > 0) {
@@ -130,25 +133,31 @@ class Reporter {
         });
         output += '\n';
       }
-    } else {
-      output += chalk.bold(' 详细发现:\n\n');
+    } else if (findings.length > 0) {
+      output += chalk.bold('📋 详细发现:\n\n');
       findings.forEach((finding, index) => {
         output += this.formatFindingItem(finding, index + 1);
       });
     }
 
-    output += chalk.bold('📈 规则匹配统计:\n');
-    for (const [pattern, count] of Object.entries(summary.patternStats)) {
-      output += `  ${chalk.blue(pattern)}: ${count} 处\n`;
+    if (findings.length > 0) {
+      output += chalk.bold('📈 规则匹配统计:\n');
+      for (const [pattern, count] of Object.entries(summary.patternStats)) {
+        output += `  ${chalk.blue(pattern)}: ${count} 处\n`;
+      }
     }
 
     output += `\n${chalk.gray(`扫描时间: ${summary.scannedAt}`)}\n`;
 
-    if (summary.totalFindings > 0) {
-      output += chalk.red(`\n退出码: 1 (发现 ${summary.totalFindings} 处风险)\n`);
-    }
-    if (summary.filesWithParseErrors > 0 && summary.totalFindings === 0) {
-      output += chalk.yellow(`\n退出码: 2 (${summary.filesWithParseErrors} 个文件解析失败)\n`);
+    output += chalk.bold('\n💡 退出码说明:\n');
+    if (summary.totalFindings > 0 && summary.filesWithParseErrors > 0) {
+      output += chalk.red(`  ${chalk.bold('3')} — 同时发现风险 (${summary.totalFindings} 处) 与解析失败 (${summary.filesWithParseErrors} 个文件)\n`);
+    } else if (summary.totalFindings > 0) {
+      output += chalk.red(`  ${chalk.bold('1')} — 发现风险 (${summary.totalFindings} 处)\n`);
+    } else if (summary.filesWithParseErrors > 0) {
+      output += chalk.yellow(`  ${chalk.bold('2')} — 扫描过程出错 (${summary.filesWithParseErrors} 个文件解析失败)\n`);
+    } else {
+      output += chalk.green(`  ${chalk.bold('0')} — 扫描成功，未发现风险\n`);
     }
 
     return output;
@@ -167,6 +176,7 @@ class Reporter {
     let output = '';
     output += chalk.bold(`${index}. ${prefix}${riskColor('▲ ' + this.getRiskLabel(finding.entropyLevel) + ' 风险')}\n`);
     output += `   ${chalk.gray('文件:')} ${chalk.white(finding.file)}\n`;
+    output += `   ${chalk.gray('语言:')} ${finding.language ? chalk.cyan(finding.language.toUpperCase()) : chalk.gray('N/A')}\n`;
     output += `   ${chalk.gray('位置:')} 第 ${finding.line} 行, 第 ${finding.column} 列\n`;
 
     if (finding.pattern) {
@@ -221,6 +231,7 @@ class Reporter {
         entropy: f.entropy,
         entropyLevel: f.entropyLevel,
         entropyLabel: f.entropyLabel,
+        language: f.language,
         context: this.showContext ? f.context : undefined,
         timestamp: f.timestamp,
         baselineStatus: f.baselineStatus || null
@@ -231,10 +242,11 @@ class Reporter {
   }
 
   formatCSV(findings) {
-    const headers = ['文件', '行号', '列号', '类型', '规则/属性', '熵值', '熵值等级', '值', '时间', '基线状态'];
+    const headers = ['文件', '语言', '行号', '列号', '类型', '规则/属性', '熵值', '熵值等级', '值', '时间', '基线状态'];
 
     const rows = findings.map(f => [
       f.file,
+      f.language || '',
       f.line,
       f.column,
       f.type,
@@ -305,7 +317,8 @@ class Reporter {
         properties: {
           entropy: finding.entropy,
           entropyLevel: finding.entropyLevel,
-          maskedValue: finding.maskedValue
+          maskedValue: finding.maskedValue,
+          language: finding.language
         }
       };
 

@@ -10,6 +10,7 @@ const { getGitDiffFiles, isGitRepository } = require('./utils/git-helper');
 const EXIT_OK = 0;
 const EXIT_RISK_FOUND = 1;
 const EXIT_SCAN_ERROR = 2;
+const EXIT_RISK_AND_ERROR = 3;
 
 const program = new Command();
 
@@ -29,7 +30,7 @@ program
   .option('--include-test', '包含测试目录和文件')
   .option('--min-entropy <value>', '最小熵值阈值', parseFloat)
   .option('--min-length <value>', '最小字符串长度', parseInt)
-  .option('--exit-code', '发现问题时以非零状态码退出 (1=风险, 2=扫描出错)')
+  .option('--exit-code', '发现问题时以非零状态码退出 (1=风险, 2=出错, 3=风险+出错)')
   .option('--baseline <path>', '基线文件路径，用于对比发现新增问题')
   .option('--baseline-save <path>', '将当前扫描结果保存为基线文件（覆盖写入）')
   .option('--baseline-update <path>', '将当前结果合并回基线（接受新增，保留已有）')
@@ -128,11 +129,12 @@ async function main() {
     }
 
     const virtualPath = options.stdinFilename || '<stdin>';
-    const findings = scanner.scanCode(code, virtualPath);
+    const stdinLang = (options.stdinLang || 'js').toLowerCase();
+    const findings = scanner.scanCode(code, virtualPath, { language: stdinLang });
     allFindings = findings;
     scannedCount = 1;
 
-    console.log(`✅ 扫描完成，发现 ${findings.length} 处可疑内容\n`);
+    console.log(`✅ 扫描完成，发现 ${findings.length} 处可疑内容 (语言: ${stdinLang.toUpperCase()})\n`);
   } else if (options.gitDiff) {
     scanMode = 'git-diff';
 
@@ -273,11 +275,17 @@ async function main() {
   }
 
   if (options.exitCode) {
-    if (parseErrorCount > 0 && allFindings.length === 0) {
-      process.exit(EXIT_SCAN_ERROR);
+    const hasFindings = allFindings.length > 0;
+    const hasParseErrors = parseErrorCount > 0;
+
+    if (hasFindings && hasParseErrors) {
+      process.exit(EXIT_RISK_AND_ERROR);
     }
-    if (allFindings.length > 0) {
+    if (hasFindings) {
       process.exit(EXIT_RISK_FOUND);
+    }
+    if (hasParseErrors) {
+      process.exit(EXIT_SCAN_ERROR);
     }
   }
 

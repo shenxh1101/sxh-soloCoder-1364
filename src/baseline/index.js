@@ -2,6 +2,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
+const BASELINE_VERSION = '1.1';
+
 class BaselineManager {
   constructor(baselinePath = null) {
     this.baselinePath = baselinePath;
@@ -34,8 +36,9 @@ class BaselineManager {
     }
 
     const baselineData = {
-      version: '1.0',
+      version: BASELINE_VERSION,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       totalFindings: findings.length,
       findings: findings.map(f => this.normalizeFinding(f))
     };
@@ -49,6 +52,73 @@ class BaselineManager {
 
     fs.writeFileSync(absolutePath, JSON.stringify(baselineData, null, 2), 'utf8');
     return absolutePath;
+  }
+
+  merge(findings) {
+    if (!this.baselinePath) {
+      return null;
+    }
+
+    const existingBaseline = this.baselineData
+      ? this.baselineData.findings
+      : [];
+
+    const existingKeys = new Set(
+      existingBaseline.map(f => `${f.file}:${f.line}:${f.valueHash}`)
+    );
+
+    const currentKeys = new Set(
+      findings.map(f => this.getFindingKey(f))
+    );
+
+    const mergedFindings = [...existingBaseline];
+
+    for (const finding of findings) {
+      const key = this.getFindingKey(finding);
+      if (!existingKeys.has(key)) {
+        mergedFindings.push(this.normalizeFinding(finding));
+        existingKeys.add(key);
+      }
+    }
+
+    const retainedFindings = existingBaseline.filter(
+      bf => currentKeys.has(`${bf.file}:${bf.line}:${bf.valueHash}`)
+    );
+
+    const removedFromBaseline = existingBaseline.filter(
+      bf => !currentKeys.has(`${bf.file}:${bf.line}:${bf.valueHash}`)
+    );
+
+    const newlyAdded = findings.filter(
+      f => !existingBaseline.some(
+        bf => `${bf.file}:${bf.line}:${bf.valueHash}` === this.getFindingKey(f)
+      )
+    );
+
+    const baselineData = {
+      version: BASELINE_VERSION,
+      createdAt: this.baselineData ? this.baselineData.createdAt : new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      totalFindings: mergedFindings.length,
+      findings: mergedFindings
+    };
+
+    const absolutePath = path.resolve(this.baselinePath);
+    const dir = path.dirname(absolutePath);
+
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    fs.writeFileSync(absolutePath, JSON.stringify(baselineData, null, 2), 'utf8');
+
+    return {
+      savedPath: absolutePath,
+      added: newlyAdded.length,
+      retained: retainedFindings.length,
+      removed: removedFromBaseline.length,
+      totalInBaseline: mergedFindings.length
+    };
   }
 
   normalizeFinding(finding) {
@@ -111,6 +181,7 @@ class BaselineManager {
     return {
       version: this.baselineData.version,
       createdAt: this.baselineData.createdAt,
+      updatedAt: this.baselineData.updatedAt || this.baselineData.createdAt,
       totalFindings: this.baselineData.totalFindings
     };
   }

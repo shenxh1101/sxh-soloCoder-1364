@@ -3,31 +3,37 @@ const path = require('path');
 
 function getGitDiffFiles(options = {}) {
   const {
-    baseBranch = 'HEAD',
-    compareBranch = null,
     cwd = process.cwd(),
-    staged = false,
-    cached = false,
-    includeDeleted = false
+    mode = 'working',
+    baseRef = null,
+    headRef = null
   } = options;
 
   try {
-    let diffCommand = 'git diff --name-only';
+    let diffCommand = 'git diff --name-only --diff-filter=ACM';
 
-    if (staged || cached) {
-      diffCommand += ' --cached';
-    }
+    switch (mode) {
+      case 'staged':
+        diffCommand += ' --cached';
+        break;
 
-    if (compareBranch) {
-      diffCommand += ` ${baseBranch}...${compareBranch}`;
-    } else if (!staged && !cached) {
-      diffCommand += ` ${baseBranch}`;
-    }
+      case 'unstaged':
+        break;
 
-    diffCommand += ' --diff-filter=ACM';
+      case 'commits':
+        if (baseRef && headRef) {
+          diffCommand += ` ${baseRef}...${headRef}`;
+        } else if (baseRef) {
+          diffCommand += ` ${baseRef}`;
+        } else {
+          diffCommand += ' HEAD';
+        }
+        break;
 
-    if (includeDeleted) {
-      diffCommand += 'D';
+      case 'working':
+      default:
+        diffCommand += ' HEAD';
+        break;
     }
 
     const result = execSync(diffCommand, {
@@ -41,17 +47,26 @@ function getGitDiffFiles(options = {}) {
       .filter(line => line.trim() !== '')
       .map(file => path.resolve(cwd, file.trim()));
 
+    const modeLabels = {
+      'staged': '暂存区',
+      'unstaged': '未暂存',
+      'commits': `${baseRef || 'HEAD'}...${headRef || 'HEAD'}`,
+      'working': '工作区 vs HEAD'
+    };
+
     return {
       success: true,
       files,
-      base: baseBranch,
-      compare: compareBranch || (staged ? 'staged' : 'working')
+      mode,
+      label: modeLabels[mode] || mode
     };
   } catch (e) {
     return {
       success: false,
       error: e.message,
-      files: []
+      files: [],
+      mode,
+      label: mode
     };
   }
 }

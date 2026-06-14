@@ -127,6 +127,19 @@ const sensitivePropertyNames = [
   'master_key'
 ];
 
+const placeholderPatterns = {
+  onlyXs: /^[xX]+$/,
+  onlyStars: /^[*_]+$/,
+  onlyZeros: /^0+$/,
+  onlyDots: /^[_\-\.]+$/,
+  sequentialAlpha: /^abcdefghijklmnopqrstuvwxyz$/,
+  sequentialDigits: /^0123456789$/,
+  repeatedPair: /^([0-9a-zA-Z]{1,4})\1{2,}$/,
+  templateBracket: /^\{+\s*\w+\s*\}+$/,
+  envVarStyle: /^\$\{?\w+\}?$/,
+  angularInterp: /^\{\{\s*\w+\s*\}\}$/
+};
+
 const defaultWhitelist = {
   exact: [
     'sk-test',
@@ -137,11 +150,6 @@ const defaultWhitelist = {
     'YOUR_API_KEY',
     'your-api-key',
     'your_secret_key',
-    'xxxxxxxxxxxxxxxxxxxx',
-    '********************************',
-    '00000000000000000000000000000000',
-    '12345678901234567890123456789012',
-    'abcdefghijklmnopqrstuvwxyz123456',
     'test-api-key',
     'test_secret_key',
     'fake-key',
@@ -151,13 +159,22 @@ const defaultWhitelist = {
     'replaceme'
   ],
   regex: [
-    /^[xX*_.-]+$/,
-    /^[0]+$/,
+    placeholderPatterns.onlyXs,
+    placeholderPatterns.onlyStars,
+    placeholderPatterns.onlyZeros,
+    placeholderPatterns.onlyDots,
+    placeholderPatterns.sequentialAlpha,
+    placeholderPatterns.sequentialDigits,
+    placeholderPatterns.repeatedPair,
+    placeholderPatterns.templateBracket,
+    placeholderPatterns.envVarStyle,
+    placeholderPatterns.angularInterp,
     /^TODO$/i,
     /^FIXME$/i,
     /^placeholder$/i,
     /^dummy$/i,
-    /^example$/i
+    /^example$/i,
+    /^redacted$/i
   ]
 };
 
@@ -190,6 +207,7 @@ module.exports = {
   defaultPatterns,
   sensitivePropertyNames,
   defaultWhitelist,
+  placeholderPatterns,
   defaultFileExtensions,
   defaultIgnoreDirs
 };

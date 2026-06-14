@@ -31,7 +31,7 @@ function loadConfig(customConfigPath = null) {
   const fileExtensions = mergeArray(defaultFileExtensions, customConfig.fileExtensions || []);
   const propertyNames = mergeArray(sensitivePropertyNames, customConfig.propertyNames || []);
 
-  return {
+  const config = {
     patterns,
     whitelist,
     ignoreDirs,
@@ -40,6 +40,15 @@ function loadConfig(customConfigPath = null) {
     minEntropy: customConfig.minEntropy || 3.0,
     minLength: customConfig.minLength || 8
   };
+
+  const validationErrors = validateConfig(customConfig);
+  if (validationErrors.length > 0) {
+    for (const err of validationErrors) {
+      console.error(`配置校验错误: ${err}`);
+    }
+  }
+
+  return config;
 }
 
 function mergePatterns(defaults, custom) {
@@ -165,7 +174,9 @@ function isWhitelisted(value, whitelist) {
 
   if (whitelist.regex && whitelist.regex.length > 0) {
     for (const regex of whitelist.regex) {
-      if (regex.test(trimmed)) {
+      const cloned = new RegExp(regex.source, regex.flags);
+      cloned.lastIndex = 0;
+      if (cloned.test(trimmed)) {
         return true;
       }
     }
@@ -174,7 +185,38 @@ function isWhitelisted(value, whitelist) {
   return false;
 }
 
+function validateConfig(config) {
+  const errors = [];
+
+  if (config.minEntropy !== undefined && (typeof config.minEntropy !== 'number' || config.minEntropy < 0)) {
+    errors.push('minEntropy 必须为非负数字');
+  }
+
+  if (config.minLength !== undefined && (typeof config.minLength !== 'number' || config.minLength < 1)) {
+    errors.push('minLength 必须为正整数');
+  }
+
+  if (config.patterns && Array.isArray(config.patterns)) {
+    config.patterns.forEach((p, i) => {
+      if (!p.id) errors.push(`patterns[${i}] 缺少 id`);
+      if (!p.pattern) errors.push(`patterns[${i}] 缺少 pattern`);
+    });
+  }
+
+  if (config.whitelist) {
+    if (config.whitelist.exact && !Array.isArray(config.whitelist.exact)) {
+      errors.push('whitelist.exact 必须为数组');
+    }
+    if (config.whitelist.regex && !Array.isArray(config.whitelist.regex)) {
+      errors.push('whitelist.regex 必须为数组');
+    }
+  }
+
+  return errors;
+}
+
 module.exports = {
   loadConfig,
-  isWhitelisted
+  isWhitelisted,
+  validateConfig
 };

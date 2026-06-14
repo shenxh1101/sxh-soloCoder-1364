@@ -45,8 +45,9 @@ class Reporter {
     return {
       totalFindings: findings.length,
       filesScanned: this.stats.filesScanned || 0,
-      filesWithFindings: files.size,
-      filesWithErrors: this.stats.filesWithErrors || 0,
+      filesWithFindings: this.stats.filesWithFindings || files.size,
+      filesWithParseErrors: this.stats.filesWithParseErrors || 0,
+      parseErrorFiles: this.stats.parseErrorFiles || [],
       highRisk,
       mediumRisk,
       lowRisk,
@@ -71,11 +72,16 @@ class Reporter {
 
     output += chalk.bold('📊 扫描摘要:\n');
     output += `  ${chalk.yellow('扫描模式:')} ${this.getScanModeLabel(summary.scanMode)}\n`;
-    output += `  ${chalk.yellow('扫描文件:')} ${summary.filesScanned}\n`;
-    output += `  ${chalk.yellow('命中文件:')} ${summary.filesWithFindings}\n`;
-    if (summary.filesWithErrors > 0) {
-      output += `  ${chalk.red('解析错误:')} ${summary.filesWithErrors}\n`;
+    output += `  ${chalk.yellow('扫描文件:')} ${summary.filesScanned} 个\n`;
+    output += `  ${chalk.yellow('命中文件:')} ${summary.filesWithFindings} 个 (含可疑密钥)\n`;
+
+    if (summary.filesWithParseErrors > 0) {
+      output += `  ${chalk.red('解析失败:')} ${summary.filesWithParseErrors} 个\n`;
+      for (const f of summary.parseErrorFiles) {
+        output += `    ${chalk.gray('- ' + f)}\n`;
+      }
     }
+
     output += `  ${chalk.yellow('发现总数:')} ${summary.totalFindings}\n`;
     output += `  ${chalk.red('高风险:')}   ${summary.highRisk}\n`;
     output += `  ${chalk.yellow('中风险:')}   ${summary.mediumRisk}\n`;
@@ -86,9 +92,9 @@ class Reporter {
       if (summary.baselineInfo.isFirstScan) {
         output += `  ${chalk.gray('首次扫描，无基线数据')}\n`;
       } else {
-        output += `  ${chalk.red('新增:')} ${summary.baselineInfo.newCount}\n`;
-        output += `  ${chalk.yellow('已存在:')} ${summary.baselineInfo.existingCount}\n`;
-        output += `  ${chalk.green('已修复:')} ${summary.baselineInfo.resolvedCount}\n`;
+        output += `  ${chalk.red('🆕 新增:')} ${summary.baselineInfo.newCount}\n`;
+        output += `  ${chalk.yellow('📌 保留:')} ${summary.baselineInfo.existingCount}\n`;
+        output += `  ${chalk.green('✅ 移除:')} ${summary.baselineInfo.resolvedCount}\n`;
       }
     }
 
@@ -96,6 +102,9 @@ class Reporter {
 
     if (findings.length === 0) {
       output += chalk.green('✅ 未发现可疑的API密钥或硬编码机密。\n');
+      if (summary.filesWithParseErrors > 0) {
+        output += chalk.yellow(`⚠️  但有 ${summary.filesWithParseErrors} 个文件解析失败，建议检查。\n`);
+      }
       return output;
     }
 
@@ -107,7 +116,7 @@ class Reporter {
       output += '\n';
 
       if (this.baselineResult.existingFindings.length > 0) {
-        output += chalk.bold('� 已存在 (基线中):\n\n');
+        output += chalk.bold('📌 已存在 (基线中):\n\n');
         this.baselineResult.existingFindings.forEach((finding, index) => {
           output += this.formatFindingItem(finding, index + 1, 'existing');
         });
@@ -122,7 +131,7 @@ class Reporter {
         output += '\n';
       }
     } else {
-      output += chalk.bold('�📋 详细发现:\n\n');
+      output += chalk.bold(' 详细发现:\n\n');
       findings.forEach((finding, index) => {
         output += this.formatFindingItem(finding, index + 1);
       });
@@ -134,6 +143,13 @@ class Reporter {
     }
 
     output += `\n${chalk.gray(`扫描时间: ${summary.scannedAt}`)}\n`;
+
+    if (summary.totalFindings > 0) {
+      output += chalk.red(`\n退出码: 1 (发现 ${summary.totalFindings} 处风险)\n`);
+    }
+    if (summary.filesWithParseErrors > 0 && summary.totalFindings === 0) {
+      output += chalk.yellow(`\n退出码: 2 (${summary.filesWithParseErrors} 个文件解析失败)\n`);
+    }
 
     return output;
   }
@@ -314,15 +330,19 @@ class Reporter {
           tool: {
             driver: {
               name: 'api-key-miner',
-              version: '1.0.0',
+              version: '1.1.0',
               informationUri: 'https://github.com/api-key-miner',
               rules: Object.values(rules)
             }
           },
           invocations: [
             {
-              executionSuccessful: true,
-              startTimeUtc: summary.scannedAt
+              executionSuccessful: summary.filesWithParseErrors === 0,
+              startTimeUtc: summary.scannedAt,
+              toolExecutionNotifications: summary.parseErrorFiles.map(f => ({
+                level: 'error',
+                message: { text: `文件解析失败: ${f}` }
+              }))
             }
           ],
           results

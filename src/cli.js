@@ -7,12 +7,16 @@ const Reporter = require('./reporter');
 const BaselineManager = require('./baseline');
 const { getGitDiffFiles, isGitRepository } = require('./utils/git-helper');
 
+const EXIT_OK = 0;
+const EXIT_RISK_FOUND = 1;
+const EXIT_SCAN_ERROR = 2;
+
 const program = new Command();
 
 program
   .name('api-key-miner')
   .description('AST-based JavaScript API key and secret scanner')
-  .version('1.0.0');
+  .version('1.1.0');
 
 program
   .argument('[paths...]', '要扫描的文件或目录路径', [process.cwd()])
@@ -25,21 +29,29 @@ program
   .option('--include-test', '包含测试目录和文件')
   .option('--min-entropy <value>', '最小熵值阈值', parseFloat)
   .option('--min-length <value>', '最小字符串长度', parseInt)
-  .option('--exit-code', '发现问题时以非零状态码退出')
+  .option('--exit-code', '发现问题时以非零状态码退出 (1=风险, 2=扫描出错)')
   .option('--baseline <path>', '基线文件路径，用于对比发现新增问题')
-  .option('--baseline-save <path>', '将当前扫描结果保存为基线文件')
+  .option('--baseline-save <path>', '将当前扫描结果保存为基线文件（覆盖写入）')
+  .option('--baseline-update <path>', '将当前结果合并回基线（接受新增，保留已有）')
   .option('--baseline-only-new', '只显示基线对比中的新增问题')
-  .option('--git-diff', '只扫描 git diff 中的变更文件')
-  .option('--git-base <branch>', 'git diff 的基准分支', 'HEAD')
-  .option('--git-compare <branch>', 'git diff 的对比分支（可选）')
-  .option('--staged', '只扫描 git 暂存区中的变更文件')
-  .option('--stdin', '从标准输入读取 JavaScript 代码进行检测')
+  .option('--git-diff', '只扫描 git diff 中的变更文件（默认: 工作区 vs HEAD）')
+  .option('--staged', 'git diff 模式: 只扫描已暂存的变更')
+  .option('--unstaged', 'git diff 模式: 只扫描未暂存的变更')
+  .option('--commits <refs>', 'git diff 模式: 扫描两个提交之间的变更 (格式: base...head)')
+  .option('--stdin', '从标准输入读取代码进行检测')
+  .option('--stdin-filename <name>', 'stdin 模式下的虚拟文件名（用于报告定位）')
+  .option('--stdin-lang <lang>', 'stdin 模式下的语言标签 (js/ts)', 'js')
   .parse(process.argv);
 
 function readStdin() {
   return new Promise((resolve, reject) => {
     let data = '';
     process.stdin.setEncoding('utf8');
+
+    if (process.stdin.isTTY) {
+      resolve('');
+      return;
+    }
 
     process.stdin.on('data', chunk => {
       data += chunk;
@@ -51,6 +63,13 @@ function readStdin() {
 
     process.stdin.on('error', reject);
   });
+}
+
+function resolveGitDiffMode(options) {
+  if (options.commits) return 'commits';
+  if (options.staged) return 'staged';
+  if (options.unstaged) return 'unstaged';
+  return 'working';
 }
 
 async function main() {
@@ -72,20 +91,10 @@ async function main() {
 
   if (options.includeTest) {
     const testDirs = [
-      'test',
-      'tests',
-      '__tests__',
-      'spec',
-      'specs',
-      '__mocks__',
-      '__fixtures__',
-      'fixtures',
-      'mock',
-      'mocks'
+      'test', 'tests', '__tests__', 'spec', 'specs',
+      '__mocks__', '__fixtures__', 'fixtures', 'mock', 'mocks'
     ];
-    config.ignoreDirs = config.ignoreDirs.filter(
-      dir => !testDirs.includes(dir)
-    );
+    config.ignoreDirs = config.ignoreDirs.filter(dir => !testDirs.includes(dir));
   }
 
   const fileWalker = new FileWalker(config);
@@ -102,20 +111,24 @@ async function main() {
   let files = [];
   let allFindings = [];
   let scannedCount = 0;
-  let errorCount = 0;
+  let parseErrorCount = 0;
+  let parseErrorFiles = [];
 
   if (options.stdin) {
     scanMode = 'stdin';
-    console.log('\n🔍 从标准输入读取代码...');
+    const stdinLabel = options.stdinFilename || '<stdin>';
+
+    console.log(`\n🔍 从标准输入读取代码 (${stdinLabel})...`);
 
     const code = await readStdin();
 
     if (!code.trim()) {
       console.log('⚠️  标准输入为空。');
-      process.exit(0);
+      process.exit(EXIT_OK);
     }
 
-    const findings = scanner.scanCode(code, '<stdin>');
+    const virtualPath = options.stdinFilename || '<stdin>';
+    const findings = scanner.scanCode(code, virtualPath);
     allFindings = findings;
     scannedCount = 1;
 
@@ -125,29 +138,40 @@ async function main() {
 
     if (!isGitRepository(process.cwd())) {
       console.error('❌ 当前目录不是 Git 仓库');
-      process.exit(1);
+      process.exit(EXIT_SCAN_ERROR);
     }
 
-    console.log(`\n🔍 扫描 Git 变更文件 (基准: ${options.gitBase}${options.gitCompare ? ' vs ' + options.gitCompare : ''})...`);
+    const diffMode = resolveGitDiffMode(options);
+    let baseRef = null;
+    let headRef = null;
+
+    if (options.commits) {
+      const parts = options.commits.split('...');
+      baseRef = parts[0] || 'HEAD';
+      headRef = parts[1] || null;
+    }
 
     const diffResult = getGitDiffFiles({
-      baseBranch: options.gitBase,
-      compareBranch: options.gitCompare,
-      staged: options.staged,
+      mode: diffMode,
+      baseRef,
+      headRef,
       cwd: process.cwd()
     });
 
     if (!diffResult.success) {
       console.error(`❌ 获取 git diff 失败: ${diffResult.error}`);
-      process.exit(1);
+      process.exit(EXIT_SCAN_ERROR);
     }
 
     files = diffResult.files.filter(file => fileWalker.isValidFile(file));
+    const modeLabel = diffResult.label;
+
+    console.log(`\n🔍 扫描 Git 变更文件 (${modeLabel})...`);
     console.log(`📁 找到 ${files.length} 个变更的 JavaScript 文件\n`);
 
     if (files.length === 0) {
       console.log('⚠️  没有找到变更的 JavaScript 文件。');
-      process.exit(0);
+      process.exit(EXIT_OK);
     }
   } else {
     scanMode = 'full';
@@ -158,7 +182,7 @@ async function main() {
 
     if (files.length === 0) {
       console.log('⚠️  没有找到符合条件的JavaScript文件。');
-      process.exit(0);
+      process.exit(EXIT_OK);
     }
   }
 
@@ -178,12 +202,13 @@ async function main() {
           process.stdout.write('✓\n');
         }
       } catch (e) {
-        errorCount++;
-        process.stdout.write(`错误: ${e.message}\n`);
+        parseErrorCount++;
+        parseErrorFiles.push(displayPath);
+        process.stdout.write(`解析失败\n`);
       }
     }
 
-    console.log(`\n✅ 扫描完成: 成功 ${scannedCount} 个文件, 错误 ${errorCount} 个文件`);
+    console.log(`\n✅ 扫描完成: ${scannedCount} 个文件成功, ${parseErrorCount} 个文件解析失败`);
   }
 
   allFindings = allFindings.sort((a, b) => {
@@ -207,12 +232,16 @@ async function main() {
     }
   }
 
+  const filesWithFindings = new Set(allFindings.map(f => f.file)).size;
+
   const reporter = new Reporter({
     showValue: options.showValue,
     showContext: options.showContext,
     stats: {
       filesScanned: scannedCount,
-      filesWithErrors: errorCount,
+      filesWithFindings,
+      filesWithParseErrors: parseErrorCount,
+      parseErrorFiles,
       scanMode
     },
     baselineResult
@@ -224,7 +253,7 @@ async function main() {
 
   if (options.output) {
     const savedPath = reporter.saveReport(report, options.output);
-    console.log(`\n💾 报告已保存到: ${savedPath}`);
+    console.log(`💾 报告已保存到: ${savedPath}`);
   }
 
   if (options.baselineSave) {
@@ -233,14 +262,29 @@ async function main() {
     console.log(`📌 基线已保存到: ${savedPath}`);
   }
 
-  if (options.exitCode && allFindings.length > 0) {
-    process.exit(1);
+  if (options.baselineUpdate) {
+    const updateManager = new BaselineManager(options.baselineUpdate);
+    updateManager.load();
+    const result = updateManager.merge(allFindings);
+    if (result) {
+      console.log(`📌 基线已更新: ${result.savedPath}`);
+      console.log(`   新增接受: ${result.added}  保留: ${result.retained}  移除: ${result.removed}  基线总数: ${result.totalInBaseline}`);
+    }
   }
 
-  process.exit(0);
+  if (options.exitCode) {
+    if (parseErrorCount > 0 && allFindings.length === 0) {
+      process.exit(EXIT_SCAN_ERROR);
+    }
+    if (allFindings.length > 0) {
+      process.exit(EXIT_RISK_FOUND);
+    }
+  }
+
+  process.exit(EXIT_OK);
 }
 
 main().catch(err => {
   console.error('❌ 扫描出错:', err);
-  process.exit(1);
+  process.exit(EXIT_SCAN_ERROR);
 });
